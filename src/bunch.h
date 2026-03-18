@@ -198,7 +198,7 @@ public:
     std::vector<std::string> captions{};
     for( int i = 0; i < bin_edges.size() - 1; ++i ){
       auto stream = std::ostringstream{};
-      stream << std::setprecision(2) << slice_var << " " << bin_edges.at(i) << "-" << bin_edges.at(i+1) << " " << units;
+      stream << std::setprecision(2) << bin_edges.at(i) << "< " << slice_var << " < "  << bin_edges.at(i+1) << " " << units;
       captions.emplace_back( stream.str() );
     }
     return palette_.MakeLegend( captions, position );

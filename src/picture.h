@@ -38,10 +38,12 @@ struct Axis{
   /// @brief Sets the lower value of the axis
   Axis& SetLo( double lo ){ lo_ = lo; return *this; }
   Axis& SetLog( bool value = true ){ log_ = value; return *this; }
+  Axis& SetLabels( std::vector<std::string> labels ){ bin_labels_ = std::move(labels); return *this; }
   std::string title_{};
   double hi_{};
   double lo_{};
   bool log_{false};
+  std::vector<std::string> bin_labels_{};
 };
 
 /// @brief Class used to add text to the plot
@@ -102,13 +104,15 @@ public:
     if( style.marker_ >= 0 )
       graph_stack_->Add( graph, option.c_str() ); 
     if( style.marker_ < 0 )
-      graph_stack_->Add( graph, option.c_str() ); 
+      graph_stack_->Add( graph, option.c_str() );
     return *this; 
   }
   /// @brief Adds the TH2 object to the plot
-  Picture& AddToPlot( const std::string& file_name, const std::string& histo2d_name ){
-    file_histo2d_ = std::make_unique<TFile>( file_name.c_str() );
-    file_histo2d_->GetObject(histo2d_name.c_str(), histo2d_);
+  Picture& AddToPlot( const std::string& file_name, const std::string& histo2d_name, const std::string& draw_option = std::string{"colz"} ){
+    file_histo2d_.emplace_back( std::make_unique<TFile>( file_name.c_str() ) );
+    histo2d_.emplace_back();
+    file_histo2d_.back()->GetObject(histo2d_name.c_str(), histo2d_.back() );
+    h2_draw_option_.push_back(draw_option);
     return *this;
   }
   /// @brief Adds the systematical errors of the Wrap<T> to the plot
@@ -178,12 +182,17 @@ public:
     lines_.emplace_back(line);
     return *this;
   }
+  Picture& AddPave( TPave* pave ){
+    paves_.emplace_back(pave);
+    return *this;
+  }
   /// @brief Plots all of the added objects
   TPad* Print(){
     pad_->cd();
     Draw2D();
     Draw1D();
     DrawText();
+    DrawPaves();
     DrawLegends();
     DrawFunctions();
     DrawLines();
@@ -197,26 +206,30 @@ public:
   }
 private:
   void Draw2D(){
-    if( !histo2d_ )
+    if( histo2d_.empty() )
       return;
-    auto axis_titles = std::string{";"}.append( x_axis_.title_ ).append(";").append(y_axis_.title_).append(";").append(z_axis_.title_);
-    histo2d_->SetTitle(axis_titles.c_str());
-    histo2d_->Draw("colz");
-    SetLimits2D();
+    auto i = size_t{0};
+    for( auto h2 : histo2d_ ){
+      auto axis_titles = std::string{";"}.append( x_axis_.title_ ).append(";").append(y_axis_.title_).append(";").append(z_axis_.title_);
+      h2->SetTitle(axis_titles.c_str());
+      h2->Draw(h2_draw_option_.at(i).c_str());
+      SetLimits2D(h2);
+      ++i;
+    }
   }
-  void SetLimits2D(){
+  void SetLimits2D(TH2* h2){
     if( x_axis_.hi_ > x_axis_.lo_ ){
-      histo2d_->GetXaxis()->SetRangeUser(x_axis_.lo_, x_axis_.hi_);
-      histo2d_->Draw("colz");
+      h2->GetXaxis()->SetRangeUser(x_axis_.lo_, x_axis_.hi_);
+      h2->Draw("colz");
     }
     if( y_axis_.hi_ > y_axis_.lo_ ){
-      histo2d_->GetYaxis()->SetRangeUser(y_axis_.lo_, y_axis_.hi_);
-      histo2d_->Draw("colz");
+      h2->GetYaxis()->SetRangeUser(y_axis_.lo_, y_axis_.hi_);
+      h2->Draw("colz");
     }
     if( z_axis_.hi_ > z_axis_.lo_ ){
-      histo2d_->SetMinimum(z_axis_.lo_);
-      histo2d_->SetMaximum(z_axis_.hi_);
-      histo2d_->Draw("colz");
+      h2->SetMinimum(z_axis_.lo_);
+      h2->SetMaximum(z_axis_.hi_);
+      h2->Draw("colz");
     }
   }
   void Draw1D(){
@@ -224,18 +237,24 @@ private:
       return;
     auto axis_titles = std::string{";"}.append( x_axis_.title_ ).append(";").append(y_axis_.title_);
     graph_stack_->SetTitle(axis_titles.c_str());
-    graph_stack_->Draw(!histo2d_ ? "APL" : "APL+SAME");
+    graph_stack_->Draw(!histo2d_.empty() ? "APL" : "APL+SAME");
     SetLimits1D();
   }
   void SetLimits1D(){
-    if( histo2d_ )
+    if( !histo2d_.empty() )
       return;
     if( x_axis_.hi_ > x_axis_.lo_ ){
       graph_stack_->GetHistogram()->GetXaxis()->SetLimits(x_axis_.lo_, x_axis_.hi_);
+      if( !x_axis_.bin_labels_.empty()) graph_stack_->GetHistogram()->GetXaxis()->Set( x_axis_.bin_labels_.size(), x_axis_.lo_, x_axis_.hi_ );
+      for( auto i = size_t{}; i < x_axis_.bin_labels_.size(); ++i)
+      graph_stack_->GetHistogram()->GetXaxis()->SetBinLabel( i+1, x_axis_.bin_labels_.at(i).c_str() );
       graph_stack_->GetHistogram()->Draw("APL");
     }
     if( y_axis_.hi_ > y_axis_.lo_ ){
       graph_stack_->GetHistogram()->GetYaxis()->SetRangeUser(y_axis_.lo_, y_axis_.hi_);
+      if( !y_axis_.bin_labels_.empty()) graph_stack_->GetHistogram()->GetYaxis()->Set( y_axis_.bin_labels_.size(), y_axis_.lo_, y_axis_.hi_ );
+      for( auto i = size_t{}; i < y_axis_.bin_labels_.size(); ++i)
+        graph_stack_->GetHistogram()->GetYaxis()->SetBinLabel( i+1, y_axis_.bin_labels_.at(i).c_str() );
       graph_stack_->Draw("APL");
     }
   }
@@ -247,6 +266,10 @@ private:
       vec_tlatexs_.back()->SetTextSize( text.size_ );
       vec_tlatexs_.back()->Draw("same");
     }
+  }
+  void DrawPaves(){
+    for( const auto& pave : paves_ )
+      pave->Draw("same");
   }
   void DrawLegends(){
     for( auto& leg : legends_ ){
@@ -269,14 +292,16 @@ private:
   Axis y_axis_;
   Axis z_axis_;
   TPad* pad_{};
-  std::unique_ptr<TFile> file_histo2d_{};
-  TH2* histo2d_{};
+  std::vector<std::unique_ptr<TFile>> file_histo2d_{};
+  std::vector<TH2*> histo2d_{};
+  std::vector<std::string> h2_draw_option_{};
   std::unique_ptr<TMultiGraph> graph_stack_{};
   std::vector<Text> texts_{};
   std::vector< std::unique_ptr<TLatex> > vec_tlatexs_{};
   std::vector< std::unique_ptr<TF1> > functions_{};
   std::vector< std::unique_ptr<TLine> > lines_{};
   std::vector<std::unique_ptr<TLegend>> legends_;
+  std::vector<std::unique_ptr<TPave>> paves_;
 };
 
 /// @brief Class for managing the sub-plots and save the plotted data to a file.

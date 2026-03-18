@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <utility>
 
+#include <TGraph.h>
 #include <TGraphErrors.h>
 #include <TH1.h>
 #include <TFile.h>
@@ -66,17 +67,29 @@ struct Style{
   Style& SetColor( int color ){ color_ = color; return *this; }
   /// @param marker is the marker syle of the object; positive is for marker style, negative is for line style 
   Style& SetMarker( int marker ){ marker_ = marker; return *this; }
-  Style& operator()( TGraphErrors* points) {
+  Style& SetMarkerSize( int size ){ marker_size_ = size; return *this; }
+  Style& SetLineWidth( int width ){ line_width_ = width; return *this; }
+
+  Style& operator()( TGraph* points) {
     points->SetLineColor(color_);
     points->SetMarkerColor(color_);
+    for( auto i = size_t{0}; i < points->GetListOfFunctions()->GetEntries(); ++i ){
+      dynamic_cast<TF1*>(points->GetListOfFunctions()->At( i ))->SetLineColor(color_);
+    }
     if( marker_ >= 0 )
       points->SetMarkerStyle(marker_);
     if( marker_ < 0 )
       points->SetLineStyle( abs(marker_) );
+    if( marker_size_ > 0 )
+      points->SetMarkerSize(marker_size_);
+    if( line_width_ > 0 )
+      points->SetLineWidth(line_width_);
     return *this;
   }
   int color_{kBlack};
   int marker_{kFullCircle};
+  int marker_size_{-1};
+  int line_width_{-1};
 };
 
 /// @brief Dummy class for operating and storing the drawable object and pull the result in the form of TGraph object
@@ -88,7 +101,7 @@ public:
   template<typename... Args>
   Result( Args... args ){}
   /// @brief Function for extracting the result points in the form of TGraph. Specialized for each type of storing objects
-  TGraphErrors* GetPoints(){ return nullptr; }
+  TGraph* GetPoints(){ return nullptr; }
   template<typename... Args>
   /// @brief Function for rebinning the underlying object. Specialized for each type of storing objects
   Result<T>& Rebin(Args... args){ return *this; }
@@ -115,7 +128,7 @@ public:
   Systematics( Args... args ){}
   template<typename... Args>
   Systematics<T>& AddToSystematics( Args... args ){ return *this; }
-  TGraphErrors* GetPoints(){ return nullptr; }
+  TGraph* GetPoints(){ return nullptr; }
   template<typename... Args>
   Systematics<T>& Rebin(Args... args){ return *this; }
   template<typename... Args>
@@ -149,13 +162,15 @@ public:
     result_(other.result_), 
     systematics_(other.systematics_),
     style_(other.style_),
-    title_(other.title_) {  }
+    title_(other.title_),
+    option_(other.option_) {  }
   /// @brief A copy assignement operator. Copies the underlying objects.
   Wrap<T> operator=( const Wrap<T>& other ) { 
     result_ = other.result_;
     systematics_ = other.systematics_;
     style_ = other.style_;
     title_ = other.title_;
+    option_ = other.option_;
     result_points_.reset();
     sys_error_points_.reset();
     return *this;
@@ -165,25 +180,27 @@ public:
     result_(std::move(other.result_)), 
     systematics_(std::move(other.systematics_)),
     style_(std::move(other.style_)), 
-    title_(std::move(other.title_)) {  }
+    title_(std::move(other.title_)),
+    option_(std::move(other.option_)) {  }
   /// @brief A move assignement operator. Moves the underlying objects.
   Wrap<T> operator=( Wrap<T>&& other ) noexcept { 
     result_ = std::move(other.result_);
     systematics_ = std::move(other.systematics_);
     style_ = std::move(other.style_);
     title_ = std::move(other.title_);
+    option_ = std::move(other.option_);
     result_points_.reset();
     sys_error_points_.reset();
     return *this;
   }
   /// @brief Returns the result in the form TGraphErrors but keeps owning the object.
-  TGraphErrors* GetResult() { UpdatePoints(); return result_points_.get(); }
+  TGraph* GetResult() { UpdatePoints(); return result_points_.get(); }
   /// @brief Releases the result points. Memory management is handled to the caller.
-  TGraphErrors* ReleaseResult(){ UpdatePoints(); return result_points_.release(); }
+  TGraph* ReleaseResult(){ UpdatePoints(); return result_points_.release(); }
   /// @brief Returns the systematics in the form TGraphErrors but keeps owning the object.
-  TGraphErrors* GetSystematics() { UpdatePoints(); return sys_error_points_.get(); }
+  TGraph* GetSystematics() { UpdatePoints(); return sys_error_points_.get(); }
   /// @brief Releases the systematic points. Memory management is handled to the caller.
-  TGraphErrors* ReleaseSystematics(){ UpdatePoints(); return sys_error_points_.release(); }
+  TGraph* ReleaseSystematics(){ UpdatePoints(); return sys_error_points_.release(); }
   /// @brief For delayed initialization of the Wrap
   Wrap<T>& SetResult( Result<T>&& res ){ result_ = std::move(res); result_points_.reset(); return *this; };
   /// @brief For delayed initialization of the Wrap
@@ -222,7 +239,7 @@ public:
     return *this;
   }
   template<typename Func>
-  Wrap<T>& Perform(const Func& func){
+  Wrap<T>& Perform(Func&& func){
     result_.Perform(func);
     systematics_.Perform(func);
     return *this;
@@ -243,10 +260,10 @@ public:
 private:
   void UpdatePoints(){
     if( !result_points_ ){
-      result_points_ = std::unique_ptr<TGraphErrors>( result_.GetPoints() );
+      result_points_ = std::unique_ptr<TGraph>( result_.GetPoints() );
     }
     if( !sys_error_points_ ){
-      sys_error_points_ = std::unique_ptr<TGraphErrors>( systematics_.GetPoints() );
+      sys_error_points_ = std::unique_ptr<TGraph>( systematics_.GetPoints() );
     }
     if( result_points_ ){
       style_( result_points_.get() );
@@ -261,8 +278,8 @@ private:
   Style style_{};
   Result<T> result_;
   Systematics<T> systematics_;
-  std::unique_ptr<TGraphErrors> result_points_{};
-  std::unique_ptr<TGraphErrors> sys_error_points_{};
+  std::unique_ptr<TGraph> result_points_{};
+  std::unique_ptr<TGraph> sys_error_points_{};
   std::string option_;
 };
 
@@ -452,6 +469,9 @@ public:
     file_ = std::make_unique<TFile>( str_file_name.c_str(), "READ" );
     file_->GetObject( object.c_str(), histogram_ );
   }
+  Result<TH1>( TH1* histo ){
+    histogram_ = histo;
+  }
   Result<TH1>( const Result<TH1>& other ){
     auto new_name = std::string(other.histogram_->GetName()).append("_copy");
     histogram_ = dynamic_cast<TH1*>(other.histogram_->Clone( new_name.c_str() )); 
@@ -492,7 +512,7 @@ public:
     return result;
   }
   template<typename Func>
-  Result<TH1>& Perform(const Func& func){
+  Result<TH1>& Perform( Func& func){
     func(histogram_);
     return *this;
   }
@@ -564,6 +584,50 @@ public:
   }
 private:
   std::unique_ptr<TGraphErrors> graph_{};
+};
+
+template<>
+class Result<TGraph>{
+public:
+  Result() = default;
+  Result( std::string str_file_name, std::string str_obj ){
+    auto file = std::make_unique<TFile>( str_file_name.c_str(), "READ" );
+    if( !file ) throw CannotOpenAFile(str_file_name);
+    TGraph* ptr{nullptr};
+    file->GetObject(str_obj.c_str(), ptr);
+    if( !ptr ) throw CannotPullAnObject( str_file_name, str_obj );
+    graph_ = std::unique_ptr<TGraph>( dynamic_cast<TGraph*>(ptr->Clone()) );
+  }
+  Result( TGraph* points ) : graph_( std::unique_ptr<TGraph>( dynamic_cast<TGraph*>(points->Clone()) ) ) {  }
+  Result( const Result<TH1>&  histogram ) : graph_{ std::unique_ptr<TGraph>(  histogram.GetPoints() ) }{ }
+
+  Result( const Result<TGraph>& graph ) : graph_( std::unique_ptr<TGraph>( dynamic_cast<TGraph*>(graph.graph_->Clone()) ) ) {}
+
+  Result& operator=( const Result<TGraph>& graph ) {
+    graph_.reset( dynamic_cast<TGraph*>(graph.graph_->Clone()) );
+    return *this;
+  }
+  Result( Result<TGraph>&& graph ) : graph_( std::unique_ptr<TGraph>( graph.graph_.release() ) ) {}
+  Result& operator=( Result<TGraph>&& graph ) {
+    graph_.reset( graph.graph_.release() );
+    return *this;
+  }
+
+  Result& SetXAxis( std::vector<double> x_axis ){
+    int i=0;
+    for( auto x : x_axis ){
+      graph_->SetPointX( i, x);
+      ++i;
+    }
+    return *this;
+  }
+  template<typename Func>
+  Result& Perform( const Func& function ){ function(graph_); return *this; }
+  TGraph* GetPoints(){
+    return dynamic_cast<TGraph*>( graph_->Clone() );
+  }
+private:
+  std::unique_ptr<TGraph> graph_{};
 };
 
 }
